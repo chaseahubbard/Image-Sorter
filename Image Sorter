@@ -1,0 +1,249 @@
+import os
+from glob import glob
+import tkinter as tk
+from tkinter import font as tkfont
+from PIL import Image, ImageTk
+
+class DraggableImage(tk.Label):
+    def __init__(self, master, image_path, tier_app, **kwargs):
+        self.image_path = image_path
+        self.tier_app = tier_app
+        self.photo = kwargs.pop('photo')
+        super().__init__(master, image=self.photo, **kwargs)
+        self.bind('<ButtonPress-1>', self.on_start)
+        self.bind('<B1-Motion>', self.on_drag)
+        self.bind('<ButtonRelease-1>', self.on_drop)
+        # Bind double-click event to open image at native resolution
+        self.bind('<Double-Button-1>', self.on_double_click)
+        self.lift()
+
+    def on_start(self, event):
+        self.startX = event.x
+        self.startY = event.y
+        self.originX = self.winfo_x()
+        self.originY = self.winfo_y()
+        self.current_row = self.grid_info()['row']
+        self.current_column = self.grid_info()['column']
+
+    def on_drag(self, event):
+        x = self.winfo_x() - self.startX + event.x
+        y = self.winfo_y() - self.startY + event.y
+        self.place(x=x, y=y)
+
+    def on_drop(self, event):
+        self.place_forget()
+        self.grid(row=self.current_row, column=self.current_column)
+        widget = self.winfo_containing(event.x_root, event.y_root)
+        if isinstance(widget, DraggableImage) and widget != self:
+            target_row = widget.grid_info()['row']
+            target_column = widget.grid_info()['column']
+            # Swap positions in the grid
+            self.grid(row=target_row, column=target_column)
+            widget.grid(row=self.current_row, column=self.current_column)
+            # Swap positions in the data structure
+            self.tier_app.swap_images(self, widget)
+        else:
+            # Return to original position
+            self.grid(row=self.current_row, column=self.current_column)
+
+    def on_double_click(self, event):
+        # Open the image at its native resolution in a pop-up window
+        self.tier_app.open_full_image(self.image_path)
+
+class TierApp:
+    def __init__(self, master):
+        self.master = master
+        self.master.title("Tier List Creator")
+        self.canvas = tk.Canvas(self.master)
+        self.canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.scrollbar = tk.Scrollbar(self.master, command=self.canvas.yview)
+        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        self.frame = tk.Frame(self.canvas)
+        self.canvas.create_window((0, 0), window=self.frame, anchor='nw')
+        self.frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+
+        # Tiers including D and F
+        self.tiers = {'S': [], 'A': [], 'B': [], 'C': [], 'D': [], 'F': []}
+
+        self.current_index = 0
+        self.load_images()
+        self.create_widgets()
+        self.show_images()
+        self.master.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def load_images(self):
+        self.image_folder = r'C:\Random_test_stuff\Images 2.0\New folder'  # Your image folder
+        self.image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp']
+        self.image_paths = []
+        for ext in self.image_extensions:
+            self.image_paths.extend(glob(os.path.join(self.image_folder, '*' + ext)))
+        self.total_images = len(self.image_paths)
+        self.batch_size = 10  # Number of images per tier list
+        print(f"Found {self.total_images} images in {self.image_folder}")
+
+    def create_widgets(self):
+        self.image_frames = []
+        self.image_labels = []
+        self.tier_vars = []
+        self.photo_list = []
+        for i in range(5):
+            frame = tk.Frame(self.frame)
+            frame.grid(row=0, column=i, padx=5, pady=5)
+            self.image_frames.append(frame)
+            img_label = tk.Label(frame)
+            img_label.pack()
+            self.image_labels.append(img_label)
+            tier_var = tk.StringVar(value='Unassigned')
+            # Options include D and F
+            tier_menu = tk.OptionMenu(frame, tier_var, 'S', 'A', 'B', 'C', 'D', 'F')
+            tier_menu.pack()
+            self.tier_vars.append(tier_var)
+
+        # Create a frame for the Next button
+        button_frame = tk.Frame(self.master)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # Enlarge and center the Next button
+        button_font = tkfont.Font(size=14, weight='bold')
+        self.next_button = tk.Button(
+            button_frame,
+            text='Next',
+            command=self.assign_tiers,
+            font=button_font,
+            width=10,
+            height=2
+        )
+        self.next_button.pack(pady=10)
+        self.next_button.pack(anchor='center')
+
+    def show_images(self):
+        self.master.title(f"Images {self.current_index+1} to {min(self.current_index+5, self.total_images)} of {self.total_images}")
+        for i in range(5):
+            idx = self.current_index + i
+            if idx < self.total_images:
+                image_path = self.image_paths[idx]
+                image = Image.open(image_path)
+                photo = ImageTk.PhotoImage(image)
+                if len(self.photo_list) > i:
+                    self.photo_list[i] = photo
+                else:
+                    self.photo_list.append(photo)
+                self.image_labels[i].config(image=photo)
+                self.image_labels[i].image = photo  # Keep a reference
+                self.tier_vars[i].set('Unassigned')
+            else:
+                self.image_labels[i].config(image='')
+                self.image_labels[i].image = None
+                self.tier_vars[i].set('Unassigned')
+        self.frame.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def assign_tiers(self):
+        for i in range(5):
+            idx = self.current_index + i
+            if idx < self.total_images:
+                tier = self.tier_vars[i].get()
+                if tier in ['S', 'A', 'B', 'C', 'D', 'F']:
+                    image_path = self.image_paths[idx]
+                    self.tiers[tier].append(image_path)
+            else:
+                pass
+        self.current_index += 5
+        if self.current_index % self.batch_size == 0 or self.current_index >= self.total_images:
+            if any(len(tier_list) > 0 for tier_list in self.tiers.values()):
+                self.display_tier_list()
+                self.tiers = {'S': [], 'A': [], 'B': [], 'C': [], 'D': [], 'F': []}
+        if self.current_index < self.total_images:
+            self.show_images()
+        else:
+            self.on_closing()
+
+    def display_tier_list(self):
+        tiers = ['S', 'A', 'B', 'C', 'D', 'F']
+        self.tier_window = tk.Toplevel(self.master)
+        self.tier_window.title(f"Tier List {((self.current_index - 1) // self.batch_size) + 1}")
+        self.tier_canvas = tk.Canvas(self.tier_window)
+        self.tier_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar = tk.Scrollbar(self.tier_window, command=self.tier_canvas.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tier_canvas.configure(yscrollcommand=scrollbar.set)
+        self.tier_frame = tk.Frame(self.tier_canvas)
+        self.tier_canvas.create_window((0, 0), window=self.tier_frame, anchor='nw')
+        self.tier_frame.bind("<Configure>", lambda e: self.tier_canvas.configure(scrollregion=self.tier_canvas.bbox("all")))
+        self.tier_images = {}
+        images_per_row = 10
+        thumbnail_size = (100, 100)
+        for tier_idx, tier in enumerate(tiers):
+            tier_label = tk.Label(self.tier_frame, text=f'Tier {tier}', font=('Arial', 16))
+            tier_label.grid(row=tier_idx*2, column=0, columnspan=images_per_row, pady=10)
+            images = self.tiers[tier]
+            self.tier_images[tier] = []
+            for idx, img_path in enumerate(images):
+                img = Image.open(img_path)
+                img.thumbnail(thumbnail_size)
+                photo = ImageTk.PhotoImage(img)
+                row = tier_idx*2 + 1 + (idx // images_per_row)
+                col = idx % images_per_row
+                draggable = DraggableImage(self.tier_frame, img_path, self, photo=photo)
+                draggable.grid(row=row, column=col, padx=5, pady=5)
+                self.tier_images[tier].append(draggable)
+        self.tier_frame.update_idletasks()
+        self.tier_canvas.configure(scrollregion=self.tier_canvas.bbox("all"))
+
+    def swap_images(self, img1, img2):
+        tier1 = self.get_tier_of_image(img1)
+        tier2 = self.get_tier_of_image(img2)
+        idx1 = self.tier_images[tier1].index(img1)
+        idx2 = self.tier_images[tier2].index(img2)
+        self.tier_images[tier1][idx1], self.tier_images[tier2][idx2] = img2, img1
+        self.tiers[tier1][idx1], self.tiers[tier2][idx2] = self.tiers[tier2][idx2], self.tiers[tier1][idx1]
+        img1_row, img1_col = img1.grid_info()['row'], img1.grid_info()['column']
+        img2_row, img2_col = img2.grid_info()['row'], img2.grid_info()['column']
+        img1.grid(row=img2_row, column=img2_col)
+        img2.grid(row=img1_row, column=img1_col)
+
+    def get_tier_of_image(self, img_widget):
+        for tier, images in self.tier_images.items():
+            if img_widget in images:
+                return tier
+        return None
+
+    def open_full_image(self, image_path):
+        img_window = tk.Toplevel(self.master)
+        img_window.title(os.path.basename(image_path))
+        
+        image = Image.open(image_path)
+        img_width, img_height = image.size
+
+        # Get screen dimensions
+        screen_width = img_window.winfo_screenwidth()
+        screen_height = img_window.winfo_screenheight()
+
+        # Adjust window size if image is larger than screen
+        if img_width > screen_width or img_height > screen_height:
+            scale = min(screen_width / img_width, screen_height / img_height)
+            img_width = int(img_width * scale)
+            img_height = int(img_height * scale)
+            image = image.resize((img_width, img_height), Image.ANTIALIAS)
+
+        img_window.geometry(f"{img_width}x{img_height}")
+
+        photo = ImageTk.PhotoImage(image)
+        img_label = tk.Label(img_window, image=photo)
+        img_label.image = photo  # Keep a reference
+        img_label.pack()
+
+    def on_closing(self):
+        if any(len(tier_list) > 0 for tier_list in self.tiers.values()):
+            self.display_tier_list()
+        self.master.destroy()
+
+def main():
+    root = tk.Tk()
+    root.state('zoomed')  # Start the window maximized (optional)
+    app = TierApp(root)
+    root.mainloop()
+
+if __name__ == '__main__':
+    main()
